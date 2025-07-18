@@ -76,7 +76,6 @@
         signInWithEmailAndPassword,
         signOut,
         onAuthStateChanged,
-        createUserWithEmailAndPassword,
       } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
       import {
         getFirestore,
@@ -93,6 +92,8 @@
         getDocs,
         deleteDoc,
       } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+      // getFunctions and httpsCallable are no longer needed if student deletion is purely Firestore based
+      // import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 
       // --- Firebase Configuration ---
       // Ganti dengan konfigurasi Firebase Anda dari Firebase Console
@@ -109,11 +110,13 @@
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
       const db = getFirestore(app);
+      // getFunctions is no longer needed if student deletion is purely Firestore based
+      // const functions = getFunctions(app);
 
       // Global state variables (mimicking React state)
       let isLoggedIn = false;
       let userRole = null;
-      let currentUser = null;
+      let currentUser = null; // For students, this will be { uid: studentDocId }
       let studentData = null; // For StudentDashboard
       let studentTransactions = []; // For StudentDashboard
       let teacherData = null; // For TeacherDashboard
@@ -171,6 +174,8 @@
         );
 
         let bgColor, borderColor, textColor, title;
+        let duration = 3000; // Default duration for success/loading
+
         switch (type) {
           case "loading":
             bgColor = "bg-blue-100";
@@ -189,6 +194,7 @@
             borderColor = "border-red-500";
             textColor = "text-red-700";
             title = "Terjadi Kesalahan!";
+            duration = 5000; // Longer duration for errors
             break;
           default:
             bgColor = "bg-gray-100";
@@ -203,11 +209,23 @@
         msgElement.classList.remove("hidden");
 
         if (type !== "loading") {
-          setTimeout(() => msgElement.classList.add("hidden"), 3000);
+          setTimeout(() => msgElement.classList.add("hidden"), duration);
         }
 
         closeBtn.onclick = () => msgElement.classList.add("hidden");
       };
+
+      // Helper function to hash a string using SHA-256
+      async function hashString(str) {
+        const textEncoder = new TextEncoder();
+        const data = textEncoder.encode(str);
+        const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hexHash = hashArray
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+        return hexHash;
+      }
 
       // --- Render Functions (mimicking React components) ---
 
@@ -223,8 +241,8 @@
               currentLoginForm === "student" ? "" : "hidden"
             }">
               <div>
-                <label for="studentEmail" class="block text-gray-700 text-sm font-semibold mb-2">Email Siswa:</label>
-                <input type="email" id="studentEmail" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-cyan-500 focus:border-cyan-500 transition duration-200" placeholder="email@siswa.com" required />
+                <label for="studentNisn" class="block text-gray-700 text-sm font-semibold mb-2">NISN Siswa:</label>
+                <input type="text" id="studentNisn" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-cyan-500 focus:border-cyan-500 transition duration-200" placeholder="Nomor Induk Siswa Nasional" required />
               </div>
               <div>
                 <label for="studentPassword" class="block text-gray-700 text-sm font-semibold mb-2">Password:</label>
@@ -285,69 +303,112 @@
 
       async function handleLogin(e, roleToLogin) {
         e.preventDefault();
-        let email, password;
-
-        if (roleToLogin === "student") {
-          email = document.getElementById("studentEmail").value;
-          password = document.getElementById("studentPassword").value;
-        } else {
-          // roleToLogin === 'teacher'
-          email = document.getElementById("teacherEmail").value;
-          password = document.getElementById("teacherPassword").value;
-        }
 
         showMessage("loading", "Sedang login...");
-        try {
-          const userCredential = await signInWithEmailAndPassword(
-            auth,
-            email,
-            password
-          );
-          const user = userCredential.user;
 
-          const userDocRef = doc(db, "users", user.uid);
-          const userDocSnap = await getDoc(userDocRef);
+        if (roleToLogin === "teacher") {
+          const email = document.getElementById("teacherEmail").value;
+          const password = document.getElementById("teacherPassword").value;
+          try {
+            const userCredential = await signInWithEmailAndPassword(
+              auth,
+              email,
+              password
+            );
+            const user = userCredential.user;
 
-          if (userDocSnap.exists()) {
-            const userData = userDocSnap.data();
-            // Pastikan peran dari Firestore cocok dengan peran login yang dimaksudkan
-            if (userData.role === roleToLogin) {
-              showMessage("success", "Login berhasil!");
+            const userDocRef = doc(db, "users", user.uid);
+            const userDocSnap = await getDoc(userDocRef);
+
+            if (userDocSnap.exists()) {
+              const userData = userDocSnap.data();
+              if (userData.role === "teacher") {
+                showMessage("success", "Login guru berhasil!");
+                isLoggedIn = true;
+                userRole = userData.role;
+                currentUser = user;
+                setupFirestoreListeners();
+                renderApp();
+              } else {
+                showMessage("error", "Akun ini bukan akun guru.");
+                await signOut(auth);
+              }
+            } else {
+              showMessage(
+                "error",
+                "Data profil guru tidak ditemukan di database."
+              );
+              await signOut(auth);
+            }
+          } catch (error) {
+            console.error("Login guru error:", error);
+            let errorMessage = "Terjadi kesalahan saat login guru.";
+            if (error.code === "auth/invalid-email") {
+              errorMessage = "Email guru tidak valid.";
+            } else if (error.code === "auth/user-disabled") {
+              errorMessage = "Akun guru ini telah dinonaktifkan.";
+            } else if (
+              error.code === "auth/user-not-found" ||
+              error.code === "auth/wrong-password" ||
+              error.code === "auth/invalid-credential"
+            ) {
+              errorMessage = "Email atau password guru salah.";
+            }
+            showMessage("error", errorMessage);
+          }
+        } else if (roleToLogin === "student") {
+          const nisn = document.getElementById("studentNisn").value;
+          const password = document.getElementById("studentPassword").value;
+
+          try {
+            const studentsQuery = query(
+              collection(db, "users"),
+              where("studentId", "==", nisn),
+              where("role", "==", "student")
+            );
+            const querySnapshot = await getDocs(studentsQuery);
+
+            if (querySnapshot.empty) {
+              showMessage(
+                "error",
+                "NISN tidak ditemukan atau bukan akun siswa."
+              );
+              return;
+            }
+
+            const studentDoc = querySnapshot.docs[0];
+            const studentData = studentDoc.data();
+            const hashedPassword = await hashString(password);
+
+            if (studentData.password === hashedPassword) {
+              showMessage("success", "Login siswa berhasil!");
               isLoggedIn = true;
-              userRole = userData.role;
-              currentUser = user;
+              userRole = "student";
+              // For students, currentUser will hold their Firestore document ID as UID
+              currentUser = { uid: studentDoc.id };
               setupFirestoreListeners();
               renderApp();
             } else {
-              showMessage("error", "Peran tidak sesuai dengan akun ini.");
-              await signOut(auth);
+              showMessage("error", "Password siswa salah.");
             }
-          } else {
-            showMessage("error", "Data pengguna tidak ditemukan di database.");
-            await signOut(auth);
+          } catch (error) {
+            console.error("Login siswa error:", error);
+            showMessage(
+              "error",
+              "Terjadi kesalahan saat login siswa: " + error.message
+            );
           }
-        } catch (error) {
-          console.error("Login error:", error);
-          let errorMessage = "Terjadi kesalahan saat login.";
-          if (error.code === "auth/invalid-email") {
-            errorMessage = "Email tidak valid.";
-          } else if (error.code === "auth/user-disabled") {
-            errorMessage = "Akun ini telah dinonaktifkan.";
-          } else if (
-            error.code === "auth/user-not-found" ||
-            error.code === "auth/wrong-password" ||
-            error.code === "auth/invalid-credential"
-          ) {
-            errorMessage = "Email atau password salah.";
-          }
-          showMessage("error", errorMessage);
         }
       }
 
       async function handleLogout() {
         showMessage("loading", "Sedang logout...");
         try {
-          await signOut(auth);
+          // Only attempt Firebase Auth signOut if the current user is a teacher
+          if (userRole === "teacher") {
+            await signOut(auth);
+          }
+
           showMessage("success", "Berhasil logout.");
           isLoggedIn = false;
           userRole = null;
@@ -469,7 +530,9 @@
                 <p><strong>Nama:</strong> ${studentData.name}</p>
                 <p><strong>Kelas:</strong> ${studentData.classId}</p>
                 <p><strong>ID Siswa:</strong> ${studentData.studentId}</p>
-                <p><strong>Email Login:</strong> ${studentData.email}</p>
+                <p><strong>Email Login:</strong> ${
+                  studentData.email || "N/A"
+                }</p>
               </div>
               <button id="logoutBtn" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-xl shadow-md transition duration-300 ease-in-out">
                 Logout
@@ -838,8 +901,8 @@
                   <button class="w-full text-left bg-cyan-50 p-3 rounded-xl shadow-sm text-cyan-700 hover:bg-cyan-100 transition duration-200">Ubah Password</button>
                 </li>
                 <li>
-                  <button id="resetDataBtn" class="w-full text-left bg-orange-50 p-3 rounded-xl shadow-sm text-orange-700 hover:bg-orange-100 transition duration-200">
-                    Reset Data Siswa & Transaksi
+                  <button id="resetTransactionsBtn" class="w-full text-left bg-orange-50 p-3 rounded-xl shadow-sm text-orange-700 hover:bg-orange-100 transition duration-200">
+                    Reset Semua Transaksi
                   </button>
                 </li>
                 <li>
@@ -900,20 +963,16 @@
                   <input type="text" id="newStudentName" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" required />
                 </div>
                 <div>
-                  <label for="newStudentEmail" class="block text-sm font-medium text-gray-700 mb-1">Email (Username Login)</label>
-                  <input type="email" id="newStudentEmail" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" placeholder="email@example.com" required />
+                  <label for="newStudentNisn" class="block text-sm font-medium text-gray-700 mb-1">NISN (Nomor Induk Siswa Nasional)</label>
+                  <input type="text" id="newStudentNisn" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" placeholder="Contoh: 1234567890" required />
                 </div>
                 <div>
-                  <label for="newStudentPassword" class="block text-sm font-medium text-gray-700 mb-1">Password Awal</label>
+                  <label for="newStudentPassword" class="block text-sm font-medium text-gray-700 mb-1">Password Awal Siswa</label>
                   <input type="password" id="newStudentPassword" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" required minlength="6" />
                 </div>
                 <div>
                   <label for="newStudentClassId" class="block text-sm font-medium text-gray-700 mb-1">Kelas</label>
                   <input type="text" id="newStudentClassId" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" required />
-                </div>
-                <div>
-                  <label for="newStudentStudentId" class="block text-sm font-medium text-gray-700 mb-1">NISN (Nomor Induk Siswa Nasional)</label>
-                  <input type="text" id="newStudentStudentId" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" placeholder="Contoh: 1234567890" required />
                 </div>
                 <div class="flex justify-end space-x-3 mt-4">
                   <button type="button" id="cancelAddStudent" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-xl hover:bg-gray-300 transition duration-200">
@@ -944,16 +1003,16 @@
                   <input type="text" id="editStudentName" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" value="${editingStudent.name}" required />
                 </div>
                 <div>
-                  <label for="editStudentEmail" class="block text-sm font-medium text-gray-700 mb-1">Email (Username Login)</label>
-                  <input type="email" id="editStudentEmail" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" value="${editingStudent.email}" required />
+                  <label for="editStudentNisn" class="block text-sm font-medium text-gray-700 mb-1">NISN (Nomor Induk Siswa Nasional)</label>
+                  <input type="text" id="editStudentNisn" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" value="${editingStudent.studentId}" required />
                 </div>
                 <div>
                   <label for="editStudentClassId" class="block text-sm font-medium text-gray-700 mb-1">Kelas</label>
                   <input type="text" id="editStudentClassId" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" value="${editingStudent.classId}" required />
                 </div>
                 <div>
-                  <label for="editStudentStudentId" class="block text-sm font-medium text-gray-700 mb-1">NISN (Nomor Induk Siswa Nasional)</label>
-                  <input type="text" id="editStudentStudentId" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" value="${editingStudent.studentId}" required />
+                  <label for="editStudentPassword" class="block text-sm font-medium text-gray-700 mb-1">Ubah Password Siswa (Kosongkan jika tidak diubah)</label>
+                  <input type="password" id="editStudentPassword" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" minlength="6" />
                 </div>
                 <div class="flex justify-end space-x-3 mt-4">
                   <button type="button" id="cancelEditStudent" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-xl hover:bg-gray-300 transition duration-200">
@@ -1068,13 +1127,15 @@
           });
         });
 
-        // Event listener for Reset Data button
-        const resetDataBtn = document.getElementById("resetDataBtn");
-        if (resetDataBtn) {
-          resetDataBtn.addEventListener("click", () => {
+        // Event listener for Reset Transactions Only button
+        const resetTransactionsBtn = document.getElementById(
+          "resetTransactionsBtn"
+        );
+        if (resetTransactionsBtn) {
+          resetTransactionsBtn.addEventListener("click", () => {
             showConfirmationModal(
-              "Ini akan menghapus SEMUA data siswa dan transaksi. Apakah Anda yakin?",
-              handleResetData
+              "Ini akan menghapus SEMUA data transaksi. Data siswa tidak akan terpengaruh. Apakah Anda yakin?",
+              handleResetTransactionsOnly
             );
           });
         }
@@ -1298,53 +1359,64 @@
 
       async function handleAddStudentSubmit(e) {
         e.preventDefault();
-        const newStudentName = document.getElementById("newStudentName").value;
-        const newStudentEmail =
-          document.getElementById("newStudentEmail").value;
-        const newStudentPassword =
-          document.getElementById("newStudentPassword").value;
-        const newStudentClassId =
-          document.getElementById("newStudentClassId").value;
-        const newStudentStudentId = document.getElementById(
-          "newStudentStudentId"
-        ).value;
+        const newStudentNameInput = document.getElementById("newStudentName");
+        const newStudentNisnInput = document.getElementById("newStudentNisn");
+        const newStudentPasswordInput =
+          document.getElementById("newStudentPassword");
+        const newStudentClassIdInput =
+          document.getElementById("newStudentClassId");
+
+        const newStudentName = newStudentNameInput.value;
+        const newStudentNisn = newStudentNisnInput.value;
+        const newStudentPassword = newStudentPasswordInput.value;
+        const newStudentClassId = newStudentClassIdInput.value;
 
         showMessage("loading", "Menambah siswa baru...");
         try {
-          const userCredential = await createUserWithEmailAndPassword(
-            auth,
-            newStudentEmail,
-            newStudentPassword
+          // Check if NISN already exists
+          const existingStudentQuery = query(
+            collection(db, "users"),
+            where("studentId", "==", newStudentNisn),
+            where("role", "==", "student")
           );
-          const newUser = userCredential.user;
+          const existingStudentSnapshot = await getDocs(existingStudentQuery);
+          if (!existingStudentSnapshot.empty) {
+            showMessage("error", "NISN ini sudah terdaftar untuk siswa lain.");
+            return;
+          }
 
-          await setDoc(doc(db, "users", newUser.uid), {
+          // Hash the password before storing
+          const hashedPassword = await hashString(newStudentPassword);
+
+          // Add student data to Firestore 'users' collection
+          // A new document ID will be generated automatically
+          const newStudentDocRef = await addDoc(collection(db, "users"), {
             role: "student",
             name: newStudentName,
-            email: newStudentEmail,
+            studentId: newStudentNisn, // Store NISN
+            password: hashedPassword, // Store hashed password
             classId: newStudentClassId,
-            studentId: newStudentStudentId,
-            currentBalance: 0,
-            registeredBy: currentUser.uid,
+            currentBalance: 0, // Initial balance
+            registeredBy: currentUser.uid, // Track who registered the student
             registeredDate: new Date().toISOString().slice(0, 10),
-            registeredTimestamp: serverTimestamp(), // ✅ Menggunakan serverTimestamp()
+            registeredTimestamp: serverTimestamp(),
           });
+
+          // Clear form fields explicitly BEFORE closing the modal
+          newStudentNameInput.value = "";
+          newStudentNisnInput.value = "";
+          newStudentPasswordInput.value = "";
+          newStudentClassIdInput.value = "";
 
           showMessage(
             "success",
             `Siswa ${newStudentName} berhasil ditambahkan!`
           );
           showAddStudentModal = false;
-          renderTeacherDashboard(); // Re-render to close modal and update student list
+          renderTeacherDashboard(); // Re-render to update student list
         } catch (error) {
           console.error("Error adding student:", error);
-          let errorMessage = "Gagal menambah siswa.";
-          if (error.code === "auth/email-already-in-use") {
-            errorMessage = "Email ini sudah digunakan oleh akun lain.";
-          } else if (error.code === "auth/weak-password") {
-            errorMessage = "Password terlalu lemah. Minimal 6 karakter.";
-          }
-          showMessage("error", errorMessage);
+          showMessage("error", `Gagal menambah siswa: ${error.message}`);
         }
       }
 
@@ -1352,26 +1424,28 @@
         e.preventDefault();
         const studentId = document.getElementById("editStudentId").value;
         const updatedName = document.getElementById("editStudentName").value;
-        const updatedEmail = document.getElementById("editStudentEmail").value;
+        const updatedNisn = document.getElementById("editStudentNisn").value;
         const updatedClassId =
           document.getElementById("editStudentClassId").value;
-        const updatedStudentId = document.getElementById(
-          "editStudentStudentId"
-        ).value;
+        const updatedPassword = document.getElementById(
+          "editStudentPassword"
+        ).value; // New password input
 
         showMessage("loading", "Memperbarui data siswa...");
         try {
-          await updateDoc(doc(db, "users", studentId), {
+          const updateData = {
             name: updatedName,
-            email: updatedEmail,
+            studentId: updatedNisn,
             classId: updatedClassId,
-            studentId: updatedStudentId,
-          });
+            updatedAt: serverTimestamp(),
+          };
 
-          // Note: Changing email in Firestore does NOT change email in Firebase Auth.
-          // To change Auth email, it would require re-authenticating the user and then calling updateEmail().
-          // For other users (students) by a teacher, this would typically be done via a backend (e.g., Cloud Functions).
-          // For simplicity in this client-side demo, we only update Firestore.
+          // If a new password is provided, hash and update it
+          if (updatedPassword) {
+            updateData.password = await hashString(updatedPassword);
+          }
+
+          await updateDoc(doc(db, "users", studentId), updateData);
 
           showMessage(
             "success",
@@ -1403,13 +1477,8 @@
           );
           await Promise.all(deleteTransactionPromises);
 
-          // Delete student's user document
+          // Delete student's user document from Firestore
           await deleteDoc(doc(db, "users", studentId));
-
-          // Note: Deleting user from Firebase Authentication for another user (student)
-          // requires admin privileges and is typically done via a backend (e.g., Firebase Cloud Functions).
-          // This client-side app cannot directly delete another user's Auth account for security reasons.
-          // If Auth deletion is critical, implement a backend function.
 
           showMessage(
             "success",
@@ -1422,21 +1491,10 @@
         }
       }
 
-      async function handleResetData() {
-        showMessage("loading", "Meriset semua data siswa dan transaksi...");
+      async function handleResetTransactionsOnly() {
+        showMessage("loading", "Meriset semua data transaksi...");
         try {
-          // Delete all student documents
-          const studentsToDeleteQuery = query(
-            collection(db, "users"),
-            where("role", "==", "student")
-          );
-          const studentsSnapshot = await getDocs(studentsToDeleteQuery);
-          const deleteStudentPromises = studentsSnapshot.docs.map(
-            (docToDelete) => deleteDoc(doc(db, "users", docToDelete.id))
-          );
-          await Promise.all(deleteStudentPromises);
-
-          // Delete all transaction documents
+          // Delete all transaction documents from Firestore
           const transactionsToDeleteQuery = query(
             collection(db, "transactions")
           );
@@ -1446,18 +1504,11 @@
           );
           await Promise.all(deleteTransactionPromises);
 
-          // Note: Deleting all student accounts from Firebase Authentication
-          // would require admin privileges and a backend solution (e.g., Firebase Cloud Functions).
-          // This client-side app cannot directly delete multiple user Auth accounts for security reasons.
-
-          showMessage(
-            "success",
-            "Semua data siswa dan transaksi berhasil direset!"
-          );
+          showMessage("success", "Semua data transaksi berhasil direset!");
           renderTeacherDashboard(); // Re-render to refresh the dashboard
         } catch (error) {
-          console.error("Error resetting data:", error);
-          showMessage("error", `Gagal meriset data: ${error.message}`);
+          console.error("Error resetting transactions:", error);
+          showMessage("error", `Gagal meriset transaksi: ${error.message}`);
         }
       }
 
@@ -1469,24 +1520,43 @@
         renderTeacherDashboard(); // Re-render to show the modal
       }
 
-      // --- Firebase Auth State Listener ---
+      // --- Firebase Auth State Listener (Only for Teacher) ---
       onAuthStateChanged(auth, async (user) => {
+        // This listener primarily handles teacher authentication.
+        // Student login is now handled directly via Firestore query.
         if (user) {
+          // If a user is logged in via Firebase Auth, assume it's a teacher
           const userDocRef = doc(db, "users", user.uid);
           const userDocSnap = await getDoc(userDocRef);
 
           if (userDocSnap.exists()) {
             const userData = userDocSnap.data();
-            isLoggedIn = true;
-            userRole = userData.role;
-            currentUser = user;
-            setupFirestoreListeners();
+            if (userData.role === "teacher") {
+              isLoggedIn = true;
+              userRole = userData.role;
+              currentUser = user;
+              setupFirestoreListeners();
+            } else {
+              // If a student somehow logs in via Auth (e.g., old account), log them out
+              console.warn(
+                "Non-teacher user logged in via Auth, logging out:",
+                user.uid
+              );
+              await signOut(auth);
+              isLoggedIn = false;
+              userRole = null;
+              currentUser = null;
+              renderApp();
+            }
           } else {
-            console.warn("User exists in Auth but not in Firestore:", user.uid);
+            console.warn(
+              "User exists in Auth but not in Firestore (teacher profile missing):",
+              user.uid
+            );
             await signOut(auth);
             showMessage(
               "error",
-              "Data profil tidak ditemukan. Silakan login kembali."
+              "Data profil guru tidak ditemukan. Silakan login kembali."
             );
             isLoggedIn = false;
             userRole = null;
@@ -1494,16 +1564,24 @@
             renderApp(); // Render login page
           }
         } else {
-          isLoggedIn = false;
-          userRole = null;
-          currentUser = null;
-          // Stop all listeners if user logs out
-          if (unsubscribeStudentProfile) unsubscribeStudentProfile();
-          if (unsubscribeStudentTransactions) unsubscribeStudentTransactions();
-          if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
-          if (unsubscribeAllStudents) unsubscribeAllStudents();
-          if (unsubscribeAllTransactions) unsubscribeAllTransactions();
-          renderApp(); // Render login page
+          // If Auth state is null, check if a student is logged in via Firestore session
+          // This part needs careful handling to avoid infinite loops or conflicting states.
+          // For simplicity, we'll assume if Auth is null, and no student is active, then no one is logged in.
+          // The student login process itself sets isLoggedIn and userRole.
+          if (!isLoggedIn || userRole !== "student") {
+            // Only reset if not a student session
+            isLoggedIn = false;
+            userRole = null;
+            currentUser = null;
+            // Stop all listeners if user logs out
+            if (unsubscribeStudentProfile) unsubscribeStudentProfile();
+            if (unsubscribeStudentTransactions)
+              unsubscribeStudentTransactions();
+            if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
+            if (unsubscribeAllStudents) unsubscribeAllStudents();
+            if (unsubscribeAllTransactions) unsubscribeAllTransactions();
+            renderApp(); // Render login page
+          }
         }
       });
 
@@ -1514,8 +1592,16 @@
       let unsubscribeAllTransactions;
 
       function setupFirestoreListeners() {
+        // Unsubscribe existing listeners to prevent multiple subscriptions if this runs again
+        if (unsubscribeStudentProfile) unsubscribeStudentProfile();
+        if (unsubscribeStudentTransactions) unsubscribeStudentTransactions();
+        if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
+        if (unsubscribeAllStudents) unsubscribeAllStudents();
+        if (unsubscribeAllTransactions) unsubscribeAllTransactions();
+
         if (userRole === "student") {
           // Student Listeners
+          // For students, currentUser.uid is their Firestore document ID
           const studentDocRef = doc(db, "users", currentUser.uid);
           unsubscribeStudentProfile = onSnapshot(
             studentDocRef,
@@ -1524,9 +1610,9 @@
                 studentData = docSnap.data();
                 renderApp(); // Re-render when student data changes
               } else {
-                console.log("No student data found!");
-                studentData = null;
-                renderApp();
+                console.log("No student data found for logged in student!");
+                // If student's doc is deleted externally, force logout
+                handleLogout();
               }
             },
             (error) => {
@@ -1597,6 +1683,8 @@
                 id: doc.id,
                 ...doc.data(),
               }));
+              // Sort students by name for consistent display
+              allStudents.sort((a, b) => a.name.localeCompare(b.name));
               renderApp(); // Re-render when student list changes
             },
             (error) => {
