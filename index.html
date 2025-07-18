@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aplikasi Tabungan Siswa dan Guru</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Inter font -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: "Inter", sans-serif;
+      }
+      .tab-active {
+        border-bottom: 3px solid #06b6d4; /* Cyan border */
+        color: #06b6d4; /* Cyan text */
+        font-weight: 600;
+      }
+      /* Basic modal styling */
+      .modal-overlay {
+        background-color: rgba(0, 0, 0, 0.5);
+      }
+      /* Style for fixed bottom navigation on mobile */
+      @media (max-width: 767px) {
+        .fixed-bottom-nav {
+          position: fixed;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          background-color: white;
+          box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+          padding: 0.75rem;
+          display: flex;
+          justify-content: space-around;
+          border-top: 1px solid #e2e8f0; /* gray-200 */
+          z-index: 50;
+        }
+        .content-padding-bottom {
+          padding-bottom: 5rem; /* Adjust this value based on the height of your fixed nav */
+        }
+      }
+    </style>
+  </head>
+  <body class="bg-cyan-50 min-h-screen font-sans text-gray-800">
+    <!-- Global Message Component -->
+    <div
+      id="globalMessage"
+      class="fixed top-4 left-1/2 -translate-x-1/2 z-[100] p-4 rounded-md shadow-lg hidden max-w-sm w-full"
+      role="alert"
+    >
+      <div class="flex justify-between items-center">
+        <p id="messageTitle" class="font-bold"></p>
+        <button id="messageCloseBtn" class="text-current text-lg font-bold">
+          ×
+        </button>
+      </div>
+      <p id="messageText"></p>
+    </div>
+
+    <!-- Main App Container -->
+    <div id="appRoot">
+      <!-- Content will be rendered here by JavaScript -->
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+      import {
+        getAuth,
+        signInWithEmailAndPassword,
+        signOut,
+        onAuthStateChanged,
+        createUserWithEmailAndPassword,
+      } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+      import {
+        getFirestore,
+        collection,
+        query,
+        where,
+        doc,
+        getDoc,
+        setDoc,
+        updateDoc,
+        addDoc,
+        onSnapshot,
+        serverTimestamp,
+        getDocs,
+      } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+      // --- Firebase Configuration ---
+      // Ganti dengan konfigurasi Firebase Anda dari Firebase Console
+      const firebaseConfig = {
+        apiKey: "AIzaSyBWTYZH2OZuyq_mnbbxiap7iBg-17II55A",
+        authDomain: "tabungansiswa-8bbd6.firebaseapp.com",
+        projectId: "tabungansiswa-8bbd6",
+        storageBucket: "tabungansiswa-8bbd6.firebasestorage.app",
+        messagingSenderId: "1068130708793",
+        appId: "1:1068130708793:web:ab6a25c247356ca7034ce8",
+      };
+
+      // Initialize Firebase
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const db = getFirestore(app);
+
+      // Global state variables (mimicking React state)
+      let isLoggedIn = false;
+      let userRole = null;
+      let currentUser = null;
+      let studentData = null; // For StudentDashboard
+      let studentTransactions = []; // For StudentDashboard
+      let teacherData = null; // For TeacherDashboard
+      let allStudents = []; // For TeacherDashboard
+      let allTransactions = []; // For TeacherDashboard
+      let currentTeacherView = "summary"; // 'summary', 'depositWithdrawal', 'transactionHistory', 'profile'
+      let activeTeacherTab = "setoran"; // 'setoran', 'penarikan'
+      let showAddStudentModal = false;
+      let filterSiswa = "";
+      let filterTanggal = "";
+      let currentStudentView = "dashboard"; // New state for student dashboard tabs: 'dashboard', 'transactions', 'settings'
+
+      // Chart instances
+      let studentProgressChart = null;
+      let teacherBalanceChart = null;
+
+      // Global state to manage which login form is currently visible: 'student' or 'teacher'
+      let currentLoginForm = "student";
+
+      // --- Helper Functions ---
+      const formatCurrency = (amount) => {
+        return new Intl.NumberFormat("id-ID", {
+          style: "currency",
+          currency: "IDR",
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 0,
+        }).format(amount);
+      };
+
+      const showMessage = (type, text) => {
+        const msgElement = document.getElementById("globalMessage");
+        const titleElement = document.getElementById("messageTitle");
+        const textElement = document.getElementById("messageText");
+        const closeBtn = document.getElementById("messageCloseBtn");
+
+        msgElement.classList.remove(
+          "hidden",
+          "bg-blue-100",
+          "border-blue-500",
+          "text-blue-700",
+          "bg-green-100",
+          "border-green-500",
+          "text-green-700",
+          "bg-red-100",
+          "border-red-500",
+          "text-red-700",
+          "bg-gray-100",
+          "border-gray-500",
+          "text-gray-700"
+        );
+
+        let bgColor, borderColor, textColor, title;
+        switch (type) {
+          case "loading":
+            bgColor = "bg-blue-100";
+            borderColor = "border-blue-500";
+            textColor = "text-blue-700";
+            title = "Memuat...";
+            break;
+          case "success":
+            bgColor = "bg-green-100";
+            borderColor = "border-green-500";
+            textColor = "text-green-700";
+            title = "Berhasil!";
+            break;
+          case "error":
+            bgColor = "bg-red-100";
+            borderColor = "border-red-500";
+            textColor = "text-red-700";
+            title = "Terjadi Kesalahan!";
+            break;
+          default:
+            bgColor = "bg-gray-100";
+            borderColor = "border-gray-500";
+            textColor = "text-gray-700";
+            title = "";
+        }
+
+        msgElement.classList.add(bgColor, `border-l-4`, borderColor, textColor);
+        titleElement.innerText = title;
+        textElement.innerText = text;
+        msgElement.classList.remove("hidden");
+
+        if (type !== "loading") {
+          setTimeout(() => msgElement.classList.add("hidden"), 3000);
+        }
+
+        closeBtn.onclick = () => msgElement.classList.add("hidden");
+      };
+
+      // --- Render Functions (mimicking React components) ---
+
+      function renderLoginPage() {
+        const appRoot = document.getElementById("appRoot");
+        appRoot.innerHTML = `
+        <div class="min-h-screen flex items-center justify-center bg-cyan-50 p-4">
+          <div class="bg-white p-8 rounded-2xl shadow-lg w-full max-w-sm text-center">
+            <h2 class="text-3xl font-bold text-cyan-700 mb-6">Selamat Datang!</h2>
+
+            <!-- Student Login Form -->
+            <form id="studentLoginForm" class="space-y-4 ${
+              currentLoginForm === "student" ? "" : "hidden"
+            }">
+              <div>
+                <label for="studentEmail" class="block text-gray-700 text-sm font-semibold mb-2">Email Siswa:</label>
+                <input type="email" id="studentEmail" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-cyan-500 focus:border-cyan-500 transition duration-200" placeholder="email@siswa.com" required />
+              </div>
+              <div>
+                <label for="studentPassword" class="block text-gray-700 text-sm font-semibold mb-2">Password:</label>
+                <input type="password" id="studentPassword" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-cyan-500 focus:border-cyan-500 transition duration-200" placeholder="********" required />
+              </div>
+              <button type="submit" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition duration-300 ease-in-out transform hover:scale-105">
+                Login Siswa
+              </button>
+            </form>
+
+            <!-- Teacher Login Form -->
+            <form id="teacherLoginForm" class="space-y-4 ${
+              currentLoginForm === "teacher" ? "" : "hidden"
+            }">
+              <div>
+                <label for="teacherEmail" class="block text-gray-700 text-sm font-semibold mb-2">Email Guru:</label>
+                <input type="email" id="teacherEmail" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-cyan-500 focus:border-cyan-500 transition duration-200" placeholder="email@guru.com" required />
+              </div>
+              <div>
+                <label for="teacherPassword" class="block text-gray-700 text-sm font-semibold mb-2">Password:</label>
+                <input type="password" id="teacherPassword" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-cyan-500 focus:border-cyan-500 transition duration-200" placeholder="********" required />
+              </div>
+              <button type="submit" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition duration-300 ease-in-out transform hover:scale-105">
+                Login Guru
+              </button>
+            </form>
+
+            <button id="toggleLoginMode" class="mt-4 text-cyan-600 hover:underline text-sm">
+              ${
+                currentLoginForm === "student"
+                  ? "Login sebagai Guru"
+                  : "Login sebagai Siswa"
+              }
+            </button>
+          </div>
+        </div>
+      `;
+
+        const studentLoginForm = document.getElementById("studentLoginForm");
+        const teacherLoginForm = document.getElementById("teacherLoginForm");
+        const toggleLoginModeBtn = document.getElementById("toggleLoginMode");
+
+        // Event listener for toggling login mode
+        toggleLoginModeBtn.addEventListener("click", () => {
+          currentLoginForm =
+            currentLoginForm === "student" ? "teacher" : "student";
+          renderLoginPage(); // Re-render to update form visibility and button text
+        });
+
+        // Attach event listeners to the specific forms
+        studentLoginForm.addEventListener("submit", (e) =>
+          handleLogin(e, "student")
+        );
+        teacherLoginForm.addEventListener("submit", (e) =>
+          handleLogin(e, "teacher")
+        );
+      }
+
+      async function handleLogin(e, roleToLogin) {
+        e.preventDefault();
+        let email, password;
+
+        if (roleToLogin === "student") {
+          email = document.getElementById("studentEmail").value;
+          password = document.getElementById("studentPassword").value;
+        } else {
+          // roleToLogin === 'teacher'
+          email = document.getElementById("teacherEmail").value;
+          password = document.getElementById("teacherPassword").value;
+        }
+
+        showMessage("loading", "Sedang login...");
+        try {
+          const userCredential = await signInWithEmailAndPassword(
+            auth,
+            email,
+            password
+          );
+          const user = userCredential.user;
+
+          const userDocRef = doc(db, "users", user.uid);
+          const userDocSnap = await getDoc(userDocRef);
+
+          if (userDocSnap.exists()) {
+            const userData = userDocSnap.data();
+            // Pastikan peran dari Firestore cocok dengan peran login yang dimaksudkan
+            if (userData.role === roleToLogin) {
+              showMessage("success", "Login berhasil!");
+              isLoggedIn = true;
+              userRole = userData.role;
+              currentUser = user;
+              setupFirestoreListeners();
+              renderApp();
+            } else {
+              showMessage("error", "Peran tidak sesuai dengan akun ini.");
+              await signOut(auth);
+            }
+          } else {
+            showMessage("error", "Data pengguna tidak ditemukan di database.");
+            await signOut(auth);
+          }
+        } catch (error) {
+          console.error("Login error:", error);
+          let errorMessage = "Terjadi kesalahan saat login.";
+          if (error.code === "auth/invalid-email") {
+            errorMessage = "Email tidak valid.";
+          } else if (error.code === "auth/user-disabled") {
+            errorMessage = "Akun ini telah dinonaktifkan.";
+          } else if (
+            error.code === "auth/user-not-found" ||
+            error.code === "auth/wrong-password" ||
+            error.code === "auth/invalid-credential"
+          ) {
+            errorMessage = "Email atau password salah.";
+          }
+          showMessage("error", errorMessage);
+        }
+      }
+
+      async function handleLogout() {
+        showMessage("loading", "Sedang logout...");
+        try {
+          await signOut(auth);
+          showMessage("success", "Berhasil logout.");
+          isLoggedIn = false;
+          userRole = null;
+          currentUser = null;
+          studentData = null;
+          studentTransactions = [];
+          teacherData = null;
+          allStudents = [];
+          allTransactions = [];
+          currentTeacherView = "summary";
+          activeTeacherTab = "setoran";
+          showAddStudentModal = false;
+          filterSiswa = "";
+          filterTanggal = "";
+          currentStudentView = "dashboard"; // Reset student view on logout
+          if (studentProgressChart) studentProgressChart.destroy();
+          if (teacherBalanceChart) teacherBalanceChart.destroy();
+
+          // Hentikan semua listener saat logout
+          if (unsubscribeStudentProfile) unsubscribeStudentProfile();
+          if (unsubscribeStudentTransactions) unsubscribeStudentTransactions();
+          if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
+          if (unsubscribeAllStudents) unsubscribeAllStudents();
+          if (unsubscribeAllTransactions) unsubscribeAllTransactions();
+
+          renderApp();
+        } catch (error) {
+          console.error("Logout error:", error);
+          showMessage("error", "Gagal logout: " + error.message);
+        }
+      }
+
+      function renderStudentDashboard() {
+        const appRoot = document.getElementById("appRoot");
+        if (!studentData) {
+          appRoot.innerHTML = `<div class="text-center p-4">Memuat data siswa...</div>`;
+          return;
+        }
+
+        const transactionsHtml =
+          studentTransactions.length > 0
+            ? studentTransactions
+                .map(
+                  (transaction) => `
+          <li class="bg-white p-3 rounded-xl shadow flex justify-between items-center">
+            <span class="flex items-center text-gray-700">
+              <span class="mr-2 text-xl ${
+                transaction.type === "deposit"
+                  ? "text-green-500"
+                  : "text-red-500"
+              }">
+                ${transaction.type === "deposit" ? "✅" : "❌"}
+              </span>
+              ${transaction.type === "deposit" ? "Nabung" : "Ambil"}
+              <span class="text-sm text-gray-500 ml-2">(${
+                transaction.date
+              })</span>
+            </span>
+            <span class="${
+              transaction.type === "deposit" ? "text-green-600" : "text-red-600"
+            } font-medium">
+              ${transaction.type === "deposit" ? "+" : "-"} ${formatCurrency(
+                    transaction.amount
+                  )}
+            </span>
+          </li>
+        `
+                )
+                .join("")
+            : `<li class="bg-white p-3 rounded-xl shadow text-center text-gray-500">Belum ada transaksi.</li>`;
+
+        appRoot.innerHTML = `
+        <div class="bg-cyan-50 min-h-screen font-sans text-gray-800 content-padding-bottom">
+          <!-- Header -->
+          <div class="bg-cyan-500 text-white p-4 shadow-md rounded-b-xl">
+            <h1 class="text-xl font-bold">Halo, ${studentData.name}!</h1>
+            <p class="text-sm">Selamat datang di aplikasi tabunganmu.</p>
+          </div>
+
+          <!-- Tab Content Area -->
+          <div class="p-4">
+            <!-- Dashboard Content -->
+            <div id="studentDashboardContent" class="bg-white p-4 rounded-2xl shadow-md ${
+              currentStudentView === "dashboard" ? "" : "hidden"
+            }">
+              <h2 class="text-lg font-semibold text-cyan-700 mb-2">Saldo Tabungan</h2>
+              <p class="text-3xl font-bold text-yellow-500 mb-4">${formatCurrency(
+                studentData.currentBalance || 0
+              )}</p>
+
+              <h2 class="text-lg font-semibold text-cyan-700 mb-2">Kemajuan Tabungan</h2>
+              <div class="relative h-48 sm:h-64">
+                <canvas id="studentProgressChart"></canvas>
+              </div>
+            </div>
+
+            <!-- Transactions Content -->
+            <div id="studentTransactionsContent" class="bg-white p-4 rounded-2xl shadow-md ${
+              currentStudentView === "transactions" ? "" : "hidden"
+            }">
+              <h2 class="text-lg font-semibold text-cyan-700 mb-2">Riwayat Transaksi</h2>
+              <ul class="space-y-2">
+                ${transactionsHtml}
+              </ul>
+            </div>
+
+            <!-- Settings Content -->
+            <div id="studentSettingsContent" class="bg-white p-4 rounded-2xl shadow-md ${
+              currentStudentView === "settings" ? "" : "hidden"
+            }">
+              <h2 class="text-lg font-semibold text-cyan-700 mb-2">Profil Siswa</h2>
+              <div class="space-y-2 mb-4">
+                <p><strong>Nama:</strong> ${studentData.name}</p>
+                <p><strong>Kelas:</strong> ${studentData.classId}</p>
+                <p><strong>ID Siswa:</strong> ${studentData.studentId}</p>
+                <p><strong>Email Login:</strong> ${studentData.email}</p>
+              </div>
+              <button id="logoutBtn" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-xl shadow-md transition duration-300 ease-in-out">
+                Logout
+              </button>
+            </div>
+          </div>
+
+          <!-- Fixed Bottom Navigation for Student -->
+          <div class="fixed-bottom-nav">
+            <button id="navStudentDashboard" class="flex-1 text-center py-2 px-1 rounded-lg transition duration-200 ${
+              currentStudentView === "dashboard"
+                ? "text-cyan-700 font-medium bg-cyan-50"
+                : "text-gray-600 hover:bg-cyan-50"
+            }">
+              <span class="block text-2xl">📊</span>
+              <span class="block text-xs">Dashboard</span>
+            </button>
+            <button id="navStudentTransactions" class="flex-1 text-center py-2 px-1 rounded-lg transition duration-200 ${
+              currentStudentView === "transactions"
+                ? "text-cyan-700 font-medium bg-cyan-50"
+                : "text-gray-600 hover:bg-cyan-50"
+            }">
+              <span class="block text-2xl">📜</span>
+              <span class="block text-xs">Transaksi</span>
+            </button>
+            <button id="navStudentSettings" class="flex-1 text-center py-2 px-1 rounded-lg transition duration-200 ${
+              currentStudentView === "settings"
+                ? "text-cyan-700 font-medium bg-cyan-50"
+                : "text-gray-600 hover:bg-cyan-50"
+            }">
+              <span class="block text-2xl">⚙️</span>
+              <span class="block text-xs">Pengaturan</span>
+            </button>
+          </div>
+        </div>
+      `;
+
+        // Attach event listeners for student dashboard tabs
+        document
+          .getElementById("navStudentDashboard")
+          .addEventListener("click", () => {
+            currentStudentView = "dashboard";
+            renderStudentDashboard();
+          });
+        document
+          .getElementById("navStudentTransactions")
+          .addEventListener("click", () => {
+            currentStudentView = "transactions";
+            renderStudentDashboard();
+          });
+        document
+          .getElementById("navStudentSettings")
+          .addEventListener("click", () => {
+            currentStudentView = "settings";
+            renderStudentDashboard();
+          });
+
+        // Attach logout button listener (it's inside the settings tab)
+        const logoutBtn = document.getElementById("logoutBtn");
+        if (logoutBtn) {
+          logoutBtn.addEventListener("click", handleLogout);
+        }
+
+        // Render Chart only if the dashboard tab is active
+        if (currentStudentView === "dashboard") {
+          const ctx = document.getElementById("studentProgressChart");
+          if (studentProgressChart) studentProgressChart.destroy(); // Destroy previous chart instance
+          studentProgressChart = new Chart(ctx, {
+            type: "bar",
+            data: {
+              labels: ["Target", "Terkumpul"],
+              datasets: [
+                {
+                  label: "Rp",
+                  data: [100000, studentData.currentBalance || 0],
+                  backgroundColor: ["#fde047", "#06b6d4"],
+                  borderRadius: 8,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: { callback: (value) => "Rp" + value.toLocaleString() },
+                  grid: { display: false },
+                },
+                x: { grid: { display: false } },
+              },
+            },
+          });
+        } else {
+          // Destroy chart if not on dashboard tab to prevent errors with hidden canvas
+          if (studentProgressChart) {
+            studentProgressChart.destroy();
+            studentProgressChart = null;
+          }
+        }
+      }
+
+      function renderTeacherDashboard() {
+        const appRoot = document.getElementById("appRoot");
+        if (!teacherData) {
+          appRoot.innerHTML = `<div class="text-center p-4">Memuat data guru...</div>`;
+          return;
+        }
+
+        const totalBalance = allStudents.reduce(
+          (sum, student) => sum + (student.currentBalance || 0),
+          0
+        );
+        const activeStudentsCount = allStudents.length;
+
+        const studentsHtml =
+          allStudents.length > 0
+            ? allStudents
+                .map(
+                  (student) => `
+          <li class="bg-cyan-50 p-3 rounded-xl shadow-sm flex justify-between items-center">
+            <a href="#" class="text-cyan-700 font-medium hover:underline">
+              ${student.name} (${student.classId})
+            </a>
+            <span class="text-gray-600">${formatCurrency(
+              student.currentBalance || 0
+            )}</span>
+          </li>
+        `
+                )
+                .join("")
+            : `<li class="bg-cyan-50 p-3 rounded-xl shadow-sm flex justify-between items-center">
+          <span class="text-cyan-700 font-medium">Tidak ada siswa terdaftar.</span>
+        </li>`;
+
+        const studentOptionsHtml = allStudents
+          .map(
+            (student) =>
+              `<option value="${student.id}">${student.name}</option>`
+          )
+          .join("");
+
+        const filteredTransactions = allTransactions.filter((transaction) => {
+          const matchesSiswa = filterSiswa
+            ? transaction.userId === filterSiswa
+            : true;
+          const matchesTanggal = filterTanggal
+            ? transaction.date === filterTanggal
+            : true;
+          return matchesSiswa && matchesTanggal;
+        });
+
+        const transactionsTableHtml =
+          filteredTransactions.length > 0
+            ? filteredTransactions
+                .map(
+                  (transaction) => `
+          <tr key="${transaction.id}">
+            <td class="px-2 py-2 whitespace-nowrap text-sm text-gray-900">${
+              transaction.date
+            }</td>
+            <td class="px-2 py-2 whitespace-nowrap text-sm text-gray-900">
+              ${
+                allStudents.find((s) => s.id === transaction.userId)?.name ||
+                transaction.studentName ||
+                "N/A"
+              }
+            </td>
+            <td class="px-2 py-2 whitespace-nowrap text-sm ${
+              transaction.type === "deposit" ? "text-green-600" : "text-red-600"
+            } font-medium">
+              ${transaction.type === "deposit" ? "+" : "-"} ${formatCurrency(
+                    transaction.amount
+                  )}
+            </td>
+            <td class="px-2 py-2 whitespace-nowrap text-sm text-gray-900">
+              ${transaction.type === "deposit" ? "Nabung" : "Ambil"}
+            </td>
+          </tr>
+        `
+                )
+                .join("")
+            : `<tr>
+          <td colspan="4" class="px-2 py-2 text-center text-gray-500">Tidak ada transaksi yang ditemukan.</td>
+        </tr>`;
+
+        appRoot.innerHTML = `
+        <div class="bg-cyan-50 min-h-screen font-sans text-gray-800 pb-20">
+          <!-- Header -->
+          <div class="bg-cyan-500 text-white p-4 shadow-md rounded-b-xl">
+            <h1 class="text-xl font-bold">Halo, ${teacherData.name}!</h1>
+            <p class="text-sm">Selamat datang di dashboard tabungan siswa.</p>
+          </div>
+
+          <!-- Main Content Area -->
+          <div class="p-4 pb-28">
+            <!-- Beranda Guru -->
+            <div id="berandaGuru" class="bg-white p-4 rounded-2xl shadow-md mb-4 ${
+              currentTeacherView === "summary" ? "" : "hidden"
+            }">
+              <h2 class="text-lg font-semibold text-cyan-700 mb-3">Ringkasan Tabungan Kelas</h2>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div class="bg-cyan-100 p-3 rounded-xl shadow-sm">
+                  <p class="text-sm text-cyan-700">Total Saldo Seluruh Siswa</p>
+                  <p class="text-2xl font-semibold text-cyan-800">${formatCurrency(
+                    totalBalance
+                  )}</p>
+                </div>
+                <div class="bg-cyan-100 p-3 rounded-xl shadow-sm">
+                  <p class="text-sm text-cyan-700">Jumlah Siswa Aktif</p>
+                  <p class="text-2xl font-semibold text-cyan-800">${activeStudentsCount} Siswa</p>
+                </div>
+              </div>
+
+              <h2 class="text-lg font-semibold text-cyan-700 mb-2">Distribusi Saldo Siswa</h2>
+              <div class="relative h-64 w-full flex justify-center items-center">
+                <canvas id="teacherBalanceChart"></canvas>
+              </div>
+
+              <h2 class="text-lg font-semibold text-cyan-700 mt-6 mb-2">Daftar Siswa</h2>
+              <ul class="space-y-2 mb-4">
+                ${studentsHtml}
+              </ul>
+              <button id="addStudentButton" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-xl shadow-md transition duration-300 ease-in-out">
+                Tambah Siswa Baru
+              </button>
+            </div>
+
+            <!-- Setoran / Penarikan -->
+            <div id="setoranPenarikan" class="bg-white p-4 rounded-2xl shadow-md mb-4 ${
+              currentTeacherView === "depositWithdrawal" ? "" : "hidden"
+            }">
+              <h2 class="text-lg font-semibold text-cyan-700 mb-3">Setoran / Penarikan</h2>
+
+              <!-- Tabbed UI -->
+              <div class="flex border-b border-gray-200 mb-4">
+                <button id="tabSetoran" class="py-2 px-4 text-gray-600 hover:text-cyan-700 ${
+                  activeTeacherTab === "setoran" ? "tab-active" : ""
+                }">Setoran</button>
+                <button id="tabPenarikan" class="py-2 px-4 text-gray-600 hover:text-cyan-700 ${
+                  activeTeacherTab === "penarikan" ? "tab-active" : ""
+                }">Penarikan</button>
+              </div>
+
+              <!-- Setoran Form -->
+              <form id="formSetoran" class="space-y-4 ${
+                activeTeacherTab === "setoran" ? "" : "hidden"
+              }">
+                <div>
+                  <label for="siswaSetoran" class="block text-sm font-medium text-gray-700 mb-1">Pilih Siswa</label>
+                  <select id="siswaSetoran" name="siswa" required class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-cyan-500 focus:border-cyan-500 sm:text-sm">
+                    <option value="">Pilih Siswa</option>
+                    ${studentOptionsHtml}
+                  </select>
+                </div>
+                <div>
+                  <label for="jumlahSetoran" class="block text-sm font-medium text-gray-700 mb-1">Jumlah Uang (Rp)</label>
+                  <input type="number" id="jumlahSetoran" name="jumlah" required min="1" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-cyan-500 focus:border-cyan-500 sm:text-sm" placeholder="Contoh: 50000" />
+                </div>
+                <div>
+                  <label for="catatanSetoran" class="block text-sm font-medium text-gray-700 mb-1">Catatan (Opsional)</label>
+                  <textarea id="catatanSetoran" name="catatan" rows="3" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-cyan-500 focus:border-cyan-500 sm:text-sm" placeholder="Misal: Uang jajan tambahan"></textarea>
+                </div>
+                <button type="submit" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-xl shadow-md transition duration-300 ease-in-out">
+                  Simpan Setoran
+                </button>
+              </form>
+
+              <!-- Penarikan Form -->
+              <form id="formPenarikan" class="space-y-4 ${
+                activeTeacherTab === "penarikan" ? "" : "hidden"
+              }">
+                <div>
+                  <label for="siswaPenarikan" class="block text-sm font-medium text-gray-700 mb-1">Pilih Siswa</label>
+                  <select id="siswaPenarikan" name="siswa" required class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-cyan-500 focus:border-cyan-500 sm:text-sm">
+                    <option value="">Pilih Siswa</option>
+                    ${studentOptionsHtml}
+                  </select>
+                </div>
+                <div>
+                  <label for="jumlahPenarikan" class="block text-sm font-medium text-gray-700 mb-1">Jumlah Uang (Rp)</label>
+                  <input type="number" id="jumlahPenarikan" name="jumlah" required min="1" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-cyan-500 focus:border-cyan-500 sm:text-sm" placeholder="Contoh: 10000" />
+                </div>
+                <div>
+                  <label for="catatanPenarikan" class="block text-sm font-medium text-gray-700 mb-1">Catatan (Opsional)</label>
+                  <textarea id="catatanPenarikan" name="catatan" rows="3" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-cyan-500 focus:border-cyan-500 sm:text-sm" placeholder="Misal: Beli buku"></textarea>
+                </div>
+                <button type="submit" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-xl shadow-md transition duration-300 ease-in-out">
+                  Simpan Penarikan
+                </button>
+              </form>
+            </div>
+
+            <!-- Riwayat Transaksi Kelas -->
+            <div id="riwayatTransaksiKelas" class="bg-white p-4 rounded-2xl shadow-md mb-4 ${
+              currentTeacherView === "transactionHistory" ? "" : "hidden"
+            }">
+              <h2 class="text-lg font-semibold text-cyan-700 mb-3">Riwayat Transaksi Kelas</h2>
+
+              <!-- Filters -->
+              <div class="flex flex-col sm:flex-row gap-3 mb-4">
+                <div class="flex-1">
+                  <label for="filterSiswa" class="block text-sm font-medium text-gray-700 mb-1">Filter Siswa</label>
+                  <select id="filterSiswa" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-cyan-500 focus:border-cyan-500 sm:text-sm">
+                    <option value="">Semua Siswa</option>
+                    ${studentOptionsHtml}
+                  </select>
+                </div>
+                <div class="flex-1">
+                  <label for="filterTanggal" class="block text-sm font-medium text-gray-700 mb-1">Filter Tanggal</label>
+                  <input type="date" id="filterTanggal" value="${filterTanggal}" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-cyan-500 focus:border-cyan-500 sm:text-sm" />
+                </div>
+              </div>
+
+              <!-- Transaction Table -->
+              <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 rounded-lg overflow-hidden">
+                  <thead class="bg-cyan-50">
+                    <tr>
+                      <th scope="col" class="px-2 py-2 text-left text-xs font-medium text-cyan-700 uppercase tracking-wider rounded-tl-lg">Tanggal</th>
+                      <th scope="col" class="px-2 py-2 text-left text-xs font-medium text-cyan-700 uppercase tracking-wider">Nama</th>
+                      <th scope="col" class="px-2 py-2 text-left text-xs font-medium text-cyan-700 uppercase tracking-wider">Jumlah</th>
+                      <th scope="col" class="px-2 py-2 text-left text-xs font-medium text-cyan-700 uppercase tracking-wider rounded-tr-lg">Keterangan</th>
+                    </tr>
+                  </thead>
+                  <tbody id="transactionTableBody" class="bg-white divide-y divide-gray-200">
+                    ${transactionsTableHtml}
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="mt-4 flex justify-end">
+                <button class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-xl shadow-md transition duration-300 ease-in-out">
+                  Export PDF / Cetak
+                </button>
+              </div>
+            </div>
+
+            <!-- Profil Guru -->
+            <div id="profilGuru" class="bg-white p-4 rounded-2xl shadow-md mb-4 ${
+              currentTeacherView === "profile" ? "" : "hidden"
+            }">
+              <h2 class="text-lg font-semibold text-cyan-700 mb-3">Profil Guru</h2>
+              <div class="space-y-2 mb-4">
+                <p><strong>Nama:</strong> ${teacherData.name}</p>
+                <p><strong>NIP:</strong> ${teacherData.nip}</p>
+                <p><strong>Kelas yang Dipegang:</strong> ${
+                  teacherData.classesTaught
+                    ? teacherData.classesTaught.join(", ")
+                    : "N/A"
+                }</p>
+              </div>
+
+              <h3 class="text-md font-semibold text-cyan-700 mb-2">Pengaturan</h3>
+              <ul class="space-y-2">
+                <li>
+                  <button class="w-full text-left bg-cyan-50 p-3 rounded-xl shadow-sm text-cyan-700 hover:bg-cyan-100 transition duration-200">Ubah Password</button>
+                </li>
+                <li>
+                  <button id="logoutBtnTeacher" class="w-full text-left bg-red-50 p-3 rounded-xl shadow-sm text-red-700 hover:bg-red-100 transition duration-200">
+                    Logout
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- Navigation Buttons (Fixed at bottom for mobile) -->
+          <div class="fixed bottom-0 left-0 right-0 bg-white shadow-lg p-3 flex justify-around border-t border-gray-200 md:relative md:mt-4 md:rounded-b-xl md:shadow-none md:border-none z-50">
+            <button id="navBeranda" class="flex-1 text-center py-2 px-1 rounded-lg transition duration-200 ${
+              currentTeacherView === "summary"
+                ? "text-cyan-700 font-medium bg-cyan-50"
+                : "text-gray-600 hover:bg-cyan-50"
+            }">
+              <span class="block text-2xl">🏠</span>
+              <span class="block text-xs">Beranda</span>
+            </button>
+            <button id="navTransaksi" class="flex-1 text-center py-2 px-1 rounded-lg transition duration-200 ${
+              currentTeacherView === "depositWithdrawal"
+                ? "text-cyan-700 font-medium bg-cyan-50"
+                : "text-gray-600 hover:bg-cyan-50"
+            }">
+              <span class="block text-2xl">💵</span>
+              <span class="block text-xs">Transaksi</span>
+            </button>
+            <button id="navRiwayat" class="flex-1 text-center py-2 px-1 rounded-lg transition duration-200 ${
+              currentTeacherView === "transactionHistory"
+                ? "text-cyan-700 font-medium bg-cyan-50"
+                : "text-gray-600 hover:bg-cyan-50"
+            }">
+              <span class="block text-2xl">📚</span>
+              <span class="block text-xs">Riwayat</span>
+            </button>
+            <button id="navProfil" class="flex-1 text-center py-2 px-1 rounded-lg transition duration-200 ${
+              currentTeacherView === "profile"
+                ? "text-cyan-700 font-medium bg-cyan-50"
+                : "text-gray-600 hover:bg-cyan-50"
+            }">
+              <span class="block text-2xl">👤</span>
+              <span class="block text-xs">Profil</span>
+            </button>
+          </div>
+
+          <!-- Add Student Modal -->
+          ${
+            showAddStudentModal
+              ? `
+          <div id="addStudentModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-[100] modal-overlay">
+            <div class="bg-white p-6 rounded-2xl shadow-xl w-full max-w-md">
+              <h3 class="text-xl font-bold text-cyan-700 mb-4">Tambah Siswa Baru</h3>
+              <form id="addStudentForm" class="space-y-4">
+                <div>
+                  <label for="newStudentName" class="block text-sm font-medium text-gray-700 mb-1">Nama Siswa</label>
+                  <input type="text" id="newStudentName" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" required />
+                </div>
+                <div>
+                  <label for="newStudentEmail" class="block text-sm font-medium text-gray-700 mb-1">Email (untuk Sistem Autentikasi Firebase)</label>
+                  <input type="email" id="newStudentEmail" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" placeholder="email@example.com" required />
+                </div>
+                <div>
+                  <label for="newStudentPassword" class="block text-sm font-medium text-gray-700 mb-1">Password Awal</label>
+                  <input type="password" id="newStudentPassword" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" required minlength="6" />
+                </div>
+                <div>
+                  <label for="newStudentClassId" class="block text-sm font-medium text-gray-700 mb-1">Kelas</label>
+                  <input type="text" id="newStudentClassId" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" required />
+                </div>
+                <div>
+                  <label for="newStudentStudentId" class="block text-sm font-medium text-gray-700 mb-1">NISN (Nomor Induk Siswa Nasional)</label>
+                  <input type="text" id="newStudentStudentId" class="w-full p-2 border border-gray-300 rounded-md focus:ring-cyan-500 focus:border-cyan-500" placeholder="Contoh: 1234567890" required />
+                </div>
+                <div class="flex justify-end space-x-3 mt-4">
+                  <button type="button" id="cancelAddStudent" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-xl hover:bg-gray-300 transition duration-200">
+                    Batal
+                  </button>
+                  <button type="submit" class="px-4 py-2 bg-cyan-600 text-white rounded-xl hover:bg-cyan-700 transition duration-200">
+                    Simpan Siswa
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+          `
+              : ""
+          }
+        </div>
+      `;
+
+        // Attach Event Listeners after rendering HTML
+        document
+          .getElementById("logoutBtnTeacher")
+          .addEventListener("click", handleLogout);
+        document.getElementById("navBeranda").addEventListener("click", () => {
+          currentTeacherView = "summary";
+          renderTeacherDashboard();
+        });
+        document
+          .getElementById("navTransaksi")
+          .addEventListener("click", () => {
+            currentTeacherView = "depositWithdrawal";
+            renderTeacherDashboard();
+          });
+        document.getElementById("navRiwayat").addEventListener("click", () => {
+          currentTeacherView = "transactionHistory";
+          renderTeacherDashboard();
+        });
+        document.getElementById("navProfil").addEventListener("click", () => {
+          currentTeacherView = "profile";
+          renderTeacherDashboard();
+        });
+
+        document.getElementById("tabSetoran").addEventListener("click", () => {
+          activeTeacherTab = "setoran";
+          renderTeacherDashboard();
+        });
+        document
+          .getElementById("tabPenarikan")
+          .addEventListener("click", () => {
+            activeTeacherTab = "penarikan";
+            renderTeacherDashboard();
+          });
+
+        document
+          .getElementById("formSetoran")
+          .addEventListener("submit", (e) =>
+            handleTransactionSubmit(e, "deposit")
+          );
+        document
+          .getElementById("formPenarikan")
+          .addEventListener("submit", (e) =>
+            handleTransactionSubmit(e, "withdrawal")
+          );
+
+        document
+          .getElementById("addStudentButton")
+          .addEventListener("click", () => {
+            showAddStudentModal = true;
+            renderTeacherDashboard();
+          });
+
+        if (showAddStudentModal) {
+          document
+            .getElementById("cancelAddStudent")
+            .addEventListener("click", () => {
+              showAddStudentModal = false;
+              renderTeacherDashboard();
+            });
+          document
+            .getElementById("addStudentForm")
+            .addEventListener("submit", handleAddStudentSubmit);
+        }
+
+        // Re-render Chart
+        const balanceCtx = document.getElementById("teacherBalanceChart");
+        if (balanceCtx) {
+          // Only try to render if the canvas exists in the current view
+          if (teacherBalanceChart) teacherBalanceChart.destroy();
+
+          const balanceCategories = {
+            lessThan10K: 0,
+            between10KAnd50K: 0,
+            greaterThan50K: 0,
+          };
+
+          allStudents.forEach((student) => {
+            const balance = student.currentBalance || 0;
+            if (balance < 10000) {
+              balanceCategories.lessThan10K++;
+            } else if (balance >= 10000 && balance <= 50000) {
+              balanceCategories.between10KAnd50K++;
+            } else {
+              balanceCategories.greaterThan50K++;
+            }
+          });
+
+          teacherBalanceChart = new Chart(balanceCtx, {
+            type: "pie",
+            data: {
+              labels: ["< Rp10.000", "Rp10.000 - Rp50.000", "> Rp50.000"],
+              datasets: [
+                {
+                  data: [
+                    balanceCategories.lessThan10K,
+                    balanceCategories.between10KAnd50K,
+                    balanceCategories.greaterThan50K,
+                  ],
+                  backgroundColor: [
+                    "#fde047", // Yellow
+                    "#06b6d4", // Cyan
+                    "#a78bfa", // Purple (mix color)
+                  ],
+                  borderColor: "#facc15",
+                  borderWidth: 2,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { position: "bottom", labels: { font: { size: 12 } } },
+                tooltip: {
+                  callbacks: {
+                    label: function (context) {
+                      const label = context.label || "";
+                      const value = context.raw;
+                      const total = context.dataset.data.reduce(
+                        (acc, current) => acc + current,
+                        0
+                      );
+                      const percentage =
+                        ((value / total) * 100).toFixed(1) + "%";
+                      return `${label}: ${value} siswa (${percentage})`;
+                    },
+                  },
+                },
+              },
+            },
+          });
+        } else {
+          // Destroy chart if not on summary tab
+          if (teacherBalanceChart) {
+            teacherBalanceChart.destroy();
+            teacherBalanceChart = null;
+          }
+        }
+
+        // Filter event listeners
+        const filterSiswaSelect = document.getElementById("filterSiswa");
+        const filterTanggalInput = document.getElementById("filterTanggal");
+
+        if (filterSiswaSelect) {
+          filterSiswaSelect.value = filterSiswa; // Set current filter value
+          filterSiswaSelect.onchange = (e) => {
+            filterSiswa = e.target.value;
+            renderTeacherDashboard();
+          };
+        }
+        if (filterTanggalInput) {
+          filterTanggalInput.value = filterTanggal; // Set current filter value
+          filterTanggalInput.onchange = (e) => {
+            filterTanggal = e.target.value;
+            renderTeacherDashboard();
+          };
+        }
+      }
+
+      // --- Firebase Auth State Listener ---
+      onAuthStateChanged(auth, async (user) => {
+        if (user) {
+          const userDocRef = doc(db, "users", user.uid);
+          const userDocSnap = await getDoc(userDocRef);
+
+          if (userDocSnap.exists()) {
+            const userData = userDocSnap.data();
+            isLoggedIn = true;
+            userRole = userData.role;
+            currentUser = user;
+            setupFirestoreListeners();
+          } else {
+            console.warn("User exists in Auth but not in Firestore:", user.uid);
+            await signOut(auth);
+            showMessage(
+              "error",
+              "Data profil tidak ditemukan. Silakan login kembali."
+            );
+            isLoggedIn = false;
+            userRole = null;
+            currentUser = null;
+            renderApp(); // Render login page
+          }
+        } else {
+          isLoggedIn = false;
+          userRole = null;
+          currentUser = null;
+          // Stop all listeners if user logs out
+          if (unsubscribeStudentProfile) unsubscribeStudentProfile();
+          if (unsubscribeStudentTransactions) unsubscribeStudentTransactions();
+          if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
+          if (unsubscribeAllStudents) unsubscribeAllStudents();
+          if (unsubscribeAllTransactions) unsubscribeAllTransactions();
+          renderApp(); // Render login page
+        }
+      });
+
+      let unsubscribeStudentProfile;
+      let unsubscribeStudentTransactions;
+      let unsubscribeTeacherProfile;
+      let unsubscribeAllStudents;
+      let unsubscribeAllTransactions;
+
+      function setupFirestoreListeners() {
+        if (userRole === "student") {
+          // Student Listeners
+          const studentDocRef = doc(db, "users", currentUser.uid);
+          unsubscribeStudentProfile = onSnapshot(
+            studentDocRef,
+            (docSnap) => {
+              if (docSnap.exists()) {
+                studentData = docSnap.data();
+                renderApp(); // Re-render when student data changes
+              } else {
+                console.log("No student data found!");
+                studentData = null;
+                renderApp();
+              }
+            },
+            (error) => {
+              console.error("Error fetching student data:", error);
+              showMessage("error", "Gagal memuat data profil siswa.");
+            }
+          );
+
+          const transactionsQuery = query(
+            collection(db, "transactions"),
+            where("userId", "==", currentUser.uid)
+          );
+          unsubscribeStudentTransactions = onSnapshot(
+            transactionsQuery,
+            (snapshot) => {
+              studentTransactions = snapshot.docs.map((doc) => ({
+                id: doc.id,
+                ...doc.data(),
+              }));
+              studentTransactions.sort((a, b) => {
+                // Pastikan timestamp ada dan merupakan objek Timestamp Firebase
+                const dateA =
+                  a.timestamp && typeof a.timestamp.toDate === "function"
+                    ? a.timestamp.toDate()
+                    : new Date(a.date);
+                const dateB =
+                  b.timestamp && typeof b.timestamp.toDate === "function"
+                    ? b.timestamp.toDate()
+                    : new Date(b.date);
+                return dateB - dateA;
+              });
+              renderApp(); // Re-render when student transactions change
+            },
+            (error) => {
+              console.error("Error fetching student transactions:", error);
+              showMessage("error", "Gagal memuat riwayat transaksi siswa.");
+            }
+          );
+        } else if (userRole === "teacher") {
+          // Teacher Listeners
+          const teacherDocRef = doc(db, "users", currentUser.uid);
+          unsubscribeTeacherProfile = onSnapshot(
+            teacherDocRef,
+            (docSnap) => {
+              if (docSnap.exists()) {
+                teacherData = docSnap.data();
+                renderApp(); // Re-render when teacher data changes
+              } else {
+                console.log("No teacher data found!");
+                teacherData = null;
+                renderApp();
+              }
+            },
+            (error) => {
+              console.error("Error fetching teacher data:", error);
+              showMessage("error", "Gagal memuat data profil guru.");
+            }
+          );
+
+          const studentsQuery = query(
+            collection(db, "users"),
+            where("role", "==", "student")
+          );
+          unsubscribeAllStudents = onSnapshot(
+            studentsQuery,
+            (snapshot) => {
+              allStudents = snapshot.docs.map((doc) => ({
+                id: doc.id,
+                ...doc.data(),
+              }));
+              renderApp(); // Re-render when student list changes
+            },
+            (error) => {
+              console.error("Error fetching students:", error);
+              showMessage("error", "Gagal memuat daftar siswa.");
+            }
+          );
+
+          const transactionsQuery = query(collection(db, "transactions"));
+          unsubscribeAllTransactions = onSnapshot(
+            transactionsQuery,
+            (snapshot) => {
+              allTransactions = snapshot.docs.map((doc) => ({
+                id: doc.id,
+                ...doc.data(),
+              }));
+              allTransactions.sort((a, b) => {
+                // Pastikan timestamp ada dan merupakan objek Timestamp Firebase
+                const dateA =
+                  a.timestamp && typeof a.timestamp.toDate === "function"
+                    ? a.timestamp.toDate()
+                    : new Date(a.date);
+                const dateB =
+                  b.timestamp && typeof b.timestamp.toDate === "function"
+                    ? b.timestamp.toDate()
+                    : new Date(b.date);
+                return dateB - dateA;
+              });
+              renderApp(); // Re-render when all transactions change
+            },
+            (error) => {
+              console.error("Error fetching transactions:", error);
+              showMessage("error", "Gagal memuat riwayat transaksi.");
+            }
+          );
+        }
+      }
+
+      // --- Main Render Function ---
+      function renderApp() {
+        if (!isLoggedIn) {
+          renderLoginPage();
+        } else if (userRole === "student") {
+          renderStudentDashboard();
+        } else if (userRole === "teacher") {
+          renderTeacherDashboard();
+        }
+      }
+
+      // Initial render when the script loads
+      renderApp();
+    </script>
+  </body>
+</html>
