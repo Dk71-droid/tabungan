@@ -13,6 +13,31 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
+
+    <!-- Link ke manifest.json -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- Tambahkan script untuk mendaftarkan service worker -->
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("/service-worker.js").then(
+            function (registration) {
+              // Pendaftaran berhasil
+              console.log(
+                "ServiceWorker registration successful with scope: ",
+                registration.scope
+              );
+            },
+            function (err) {
+              // Pendaftaran gagal
+              console.log("ServiceWorker registration failed: ", err);
+            }
+          );
+        });
+      }
+    </script>
+
     <style>
       body {
         font-family: "Inter", sans-serif;
@@ -76,6 +101,7 @@
         signInWithEmailAndPassword,
         signOut,
         onAuthStateChanged,
+        createUserWithEmailAndPassword,
       } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
       import {
         getFirestore,
@@ -92,13 +118,11 @@
         getDocs,
         deleteDoc,
       } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-      // getFunctions and httpsCallable are no longer needed if student deletion is purely Firestore based
-      // import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 
       // --- Firebase Configuration ---
       // Ganti dengan konfigurasi Firebase Anda dari Firebase Console
       const firebaseConfig = {
-        apiKey: "AIzaSyBWTYZH2OZuyq_mnbbxiap7iBg-17II55A",
+        apiKey: "AIzaSyBWTYZH2OZuyq_mnbbxiap7iBg-17II55A", // <--- PASTIKAN INI ADALAH API KEY ASLI ANDA
         authDomain: "tabungansiswa-8bbd6.firebaseapp.com",
         projectId: "tabungansiswa-8bbd6",
         storageBucket: "tabungansiswa-8bbd6.firebasestorage.app",
@@ -110,8 +134,6 @@
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
       const db = getFirestore(app);
-      // getFunctions is no longer needed if student deletion is purely Firestore based
-      // const functions = getFunctions(app);
 
       // Global state variables (mimicking React state)
       let isLoggedIn = false;
@@ -122,9 +144,11 @@
       let teacherData = null; // For TeacherDashboard
       let allStudents = []; // For TeacherDashboard
       let allTransactions = []; // For TeacherDashboard
+      // allTeachers is no longer needed as admin role is removed
       let currentTeacherView = "summary"; // 'summary', 'depositWithdrawal', 'transactionHistory', 'profile'
       let activeTeacherTab = "setoran"; // 'setoran', 'penarikan'
       let showAddStudentModal = false;
+      // showAddTeacherModal is no longer needed as admin role is removed
       let filterSiswa = "";
       let filterTanggal = "";
       let currentStudentView = "dashboard"; // New state for student dashboard tabs: 'dashboard', 'transactions', 'settings'
@@ -139,7 +163,7 @@
       let teacherBalanceChart = null;
 
       // Global state to manage which login form is currently visible: 'student' or 'teacher'
-      let currentLoginForm = "student";
+      let currentLoginForm = "student"; // Default to student login
 
       // --- Helper Functions ---
       const formatCurrency = (amount) => {
@@ -269,27 +293,35 @@
                 Login Guru
               </button>
             </form>
-
-            <button id="toggleLoginMode" class="mt-4 text-cyan-600 hover:underline text-sm">
-              ${
-                currentLoginForm === "student"
-                  ? "Login sebagai Guru"
-                  : "Login sebagai Siswa"
-              }
-            </button>
+            
+            <div class="mt-4 flex justify-center space-x-2">
+              <button id="toggleLoginStudent" class="text-cyan-600 hover:underline text-sm ${
+                currentLoginForm === "student" ? "font-bold" : ""
+              }">Siswa</button>
+              <span class="text-gray-400">|</span>
+              <button id="toggleLoginTeacher" class="text-cyan-600 hover:underline text-sm ${
+                currentLoginForm === "teacher" ? "font-bold" : ""
+              }">Guru</button>
+            </div>
           </div>
         </div>
       `;
 
         const studentLoginForm = document.getElementById("studentLoginForm");
         const teacherLoginForm = document.getElementById("teacherLoginForm");
-        const toggleLoginModeBtn = document.getElementById("toggleLoginMode");
+        const toggleLoginStudentBtn =
+          document.getElementById("toggleLoginStudent");
+        const toggleLoginTeacherBtn =
+          document.getElementById("toggleLoginTeacher");
 
-        // Event listener for toggling login mode
-        toggleLoginModeBtn.addEventListener("click", () => {
-          currentLoginForm =
-            currentLoginForm === "student" ? "teacher" : "student";
-          renderLoginPage(); // Re-render to update form visibility and button text
+        // Event listeners for toggling login mode
+        toggleLoginStudentBtn.addEventListener("click", () => {
+          currentLoginForm = "student";
+          renderLoginPage();
+        });
+        toggleLoginTeacherBtn.addEventListener("click", () => {
+          currentLoginForm = "teacher";
+          renderLoginPage();
         });
 
         // Attach event listeners to the specific forms
@@ -307,8 +339,8 @@
         showMessage("loading", "Sedang login...");
 
         if (roleToLogin === "teacher") {
-          const email = document.getElementById("teacherEmail").value;
-          const password = document.getElementById("teacherPassword").value;
+          const email = document.getElementById(`teacherEmail`).value;
+          const password = document.getElementById(`teacherPassword`).value;
           try {
             const userCredential = await signInWithEmailAndPassword(
               auth,
@@ -322,37 +354,38 @@
 
             if (userDocSnap.exists()) {
               const userData = userDocSnap.data();
-              if (userData.role === "teacher") {
-                showMessage("success", "Login guru berhasil!");
+              if (userData.role === roleToLogin) {
+                showMessage("success", `Login guru berhasil!`);
                 isLoggedIn = true;
                 userRole = userData.role;
                 currentUser = user;
                 setupFirestoreListeners();
                 renderApp();
               } else {
-                showMessage("error", "Akun ini bukan akun guru.");
+                showMessage("error", `Akun ini bukan akun guru.`);
                 await signOut(auth);
               }
             } else {
+              // Ini adalah kasus di mana akun Firebase Auth ada, tetapi dokumen profil di Firestore tidak ada.
               showMessage(
                 "error",
-                "Data profil guru tidak ditemukan di database."
+                `Data profil guru tidak ditemukan di database. Pastikan akun ini terdaftar dengan benar.`
               );
-              await signOut(auth);
+              await signOut(auth); // Paksa logout karena profil tidak lengkap
             }
           } catch (error) {
-            console.error("Login guru error:", error);
-            let errorMessage = "Terjadi kesalahan saat login guru.";
+            console.error(`Login guru error:`, error);
+            let errorMessage = `Terjadi kesalahan saat login guru.`;
             if (error.code === "auth/invalid-email") {
-              errorMessage = "Email guru tidak valid.";
+              errorMessage = "Email tidak valid.";
             } else if (error.code === "auth/user-disabled") {
-              errorMessage = "Akun guru ini telah dinonaktifkan.";
+              errorMessage = "Akun ini telah dinonaktifkan.";
             } else if (
               error.code === "auth/user-not-found" ||
               error.code === "auth/wrong-password" ||
               error.code === "auth/invalid-credential"
             ) {
-              errorMessage = "Email atau password guru salah.";
+              errorMessage = "Email atau password salah.";
             }
             showMessage("error", errorMessage);
           }
@@ -418,9 +451,11 @@
           teacherData = null;
           allStudents = [];
           allTransactions = [];
+          // allTeachers no longer needed
           currentTeacherView = "summary";
           activeTeacherTab = "setoran";
           showAddStudentModal = false;
+          // showAddTeacherModal no longer needed
           filterSiswa = "";
           filterTanggal = "";
           currentStudentView = "dashboard"; // Reset student view on logout
@@ -439,6 +474,7 @@
           if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
           if (unsubscribeAllStudents) unsubscribeAllStudents();
           if (unsubscribeAllTransactions) unsubscribeAllTransactions();
+          // unsubscribeAllTeachers no longer needed
 
           renderApp();
         } catch (error) {
@@ -1040,18 +1076,18 @@
               <div class="flex justify-center space-x-4">
                 <button type="button" id="cancelConfirm" class="px-6 py-2 bg-gray-200 text-gray-800 rounded-xl hover:bg-gray-300 transition duration-200">
                   Batal
-                </button>
-                <button type="button" id="executeConfirm" class="px-6 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition duration-200">
-                  Lanjutkan
-                </button>
+                  </button>
+                  <button type="button" id="executeConfirm" class="px-6 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition duration-200">
+                    Lanjutkan
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-          `
+            `
               : ""
           }
-        </div>
-      `;
+          </div>
+        `;
 
         // Attach Event Listeners after rendering HTML
         document
@@ -1282,6 +1318,8 @@
         }
       }
 
+      // renderAdminDashboard and related functions are removed as per request.
+
       async function handleTransactionSubmit(e, type) {
         e.preventDefault();
         const form = e.target;
@@ -1397,7 +1435,7 @@
             password: hashedPassword, // Store hashed password
             classId: newStudentClassId,
             currentBalance: 0, // Initial balance
-            registeredBy: currentUser.uid, // Track who registered the student
+            registeredBy: currentUser.uid, // Track who registered the student (the teacher's UID)
             registeredDate: new Date().toISOString().slice(0, 10),
             registeredTimestamp: serverTimestamp(),
           });
@@ -1491,6 +1529,8 @@
         }
       }
 
+      // handleAddTeacherSubmit and handleDeleteTeacher are removed as admin role is removed
+
       async function handleResetTransactionsOnly() {
         showMessage("loading", "Meriset semua data transaksi...");
         try {
@@ -1517,27 +1557,30 @@
         confirmModalMessage = message;
         confirmModalAction = action;
         showConfirmModal = true;
-        renderTeacherDashboard(); // Re-render to show the modal
+        // Render based on current role to show modal correctly
+        if (userRole === "teacher") renderTeacherDashboard();
+        // No admin role anymore, so no renderAdminDashboard
       }
 
       // --- Firebase Auth State Listener (Only for Teacher) ---
       onAuthStateChanged(auth, async (user) => {
         // This listener primarily handles teacher authentication.
-        // Student login is now handled directly via Firestore query.
+        // Student login is handled directly via Firestore query.
         if (user) {
-          // If a user is logged in via Firebase Auth, assume it's a teacher
+          // If a user is logged in via Firebase Auth, fetch their role
           const userDocRef = doc(db, "users", user.uid);
           const userDocSnap = await getDoc(userDocRef);
 
           if (userDocSnap.exists()) {
             const userData = userDocSnap.data();
             if (userData.role === "teacher") {
+              // Only 'teacher' role is handled by Auth listener
               isLoggedIn = true;
               userRole = userData.role;
               currentUser = user;
               setupFirestoreListeners();
             } else {
-              // If a student somehow logs in via Auth (e.g., old account), log them out
+              // If a non-teacher user somehow logs in via Auth, log them out
               console.warn(
                 "Non-teacher user logged in via Auth, logging out:",
                 user.uid
@@ -1549,14 +1592,15 @@
               renderApp();
             }
           } else {
+            // User exists in Auth but not in Firestore (profile missing).
             console.warn(
-              "User exists in Auth but not in Firestore (teacher profile missing):",
+              "User exists in Auth but not in Firestore (profile missing):",
               user.uid
             );
-            await signOut(auth);
+            await signOut(auth); // Force logout
             showMessage(
               "error",
-              "Data profil guru tidak ditemukan. Silakan login kembali."
+              "Data profil tidak ditemukan. Silakan login kembali."
             );
             isLoggedIn = false;
             userRole = null;
@@ -1565,9 +1609,6 @@
           }
         } else {
           // If Auth state is null, check if a student is logged in via Firestore session
-          // This part needs careful handling to avoid infinite loops or conflicting states.
-          // For simplicity, we'll assume if Auth is null, and no student is active, then no one is logged in.
-          // The student login process itself sets isLoggedIn and userRole.
           if (!isLoggedIn || userRole !== "student") {
             // Only reset if not a student session
             isLoggedIn = false;
@@ -1580,6 +1621,7 @@
             if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
             if (unsubscribeAllStudents) unsubscribeAllStudents();
             if (unsubscribeAllTransactions) unsubscribeAllTransactions();
+            // unsubscribeAllTeachers no longer needed
             renderApp(); // Render login page
           }
         }
@@ -1590,6 +1632,7 @@
       let unsubscribeTeacherProfile;
       let unsubscribeAllStudents;
       let unsubscribeAllTransactions;
+      // let unsubscribeAllTeachers; // No longer needed
 
       function setupFirestoreListeners() {
         // Unsubscribe existing listeners to prevent multiple subscriptions if this runs again
@@ -1598,6 +1641,7 @@
         if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
         if (unsubscribeAllStudents) unsubscribeAllStudents();
         if (unsubscribeAllTransactions) unsubscribeAllTransactions();
+        // if (unsubscribeAllTeachers) unsubscribeAllTeachers(); // No longer needed
 
         if (userRole === "student") {
           // Student Listeners
@@ -1721,6 +1765,7 @@
             }
           );
         }
+        // Admin listeners are no longer needed
       }
 
       // --- Main Render Function ---
@@ -1732,6 +1777,7 @@
         } else if (userRole === "teacher") {
           renderTeacherDashboard();
         }
+        // No admin dashboard anymore
       }
 
       // Initial render when the script loads
